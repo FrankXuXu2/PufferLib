@@ -263,6 +263,7 @@ typedef struct Dogfight {
     Client *client;
     int tick;
     int max_steps;
+    int configured_max_steps;
     float episode_return;
     Plane player;
     Plane opponent;
@@ -409,6 +410,7 @@ void init(Dogfight *env, int obs_scheme, RewardConfig *rcfg, int curriculum_enab
     env->log = (Log){0};
     env->tick = 0;
     env->env_num = env_num;
+    env->configured_max_steps = env->max_steps;
     env->episode_return = 0.0f;
     env->client = NULL;
     // Observation scheme
@@ -809,6 +811,7 @@ void c_reset(Dogfight *env) {
     env->total_episodes++;
 
     env->tick = 0;
+    env->max_steps = env->configured_max_steps;
     env->episode_return = 0.0f;
 
     // Clear episode tracking (safe to clear kill after curriculum used it)

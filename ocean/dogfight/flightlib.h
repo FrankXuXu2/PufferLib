@@ -194,24 +194,11 @@ static inline void step_plane(Plane *p, float dt) {
 #define MAX_AILERON_DEFLECTION 0.35f    // ±20°
 #define MAX_RUDDER_DEFLECTION 0.35f     // ±20°
 
-// High-speed control authority scaling (prevents oscillations at high speed).
-// At high speeds, control moments scale with V^2 while damping scales with V,
-// causing under-damped behavior. Reduce actuator deflection at high V so the
-// generated moment stays bounded -- equivalent to PX4/ArduPilot inner-loop
-// q_bar / IAS^2 scheduling, applied at the plant actuator stage instead.
-//
-// Values from sweep_smoothness.sh brute-force search across ~5000 configs
-// scoring on the (maneuver x airspeed) smoothness envelope plus full-throttle
-// max-rate maneuverability. The plateau is wide; nearby values give similar
-// results. V_REF=70 (vs cruise=100) cuts authority starting earlier so the
-// V=80-100 band benefits too -- the worst pre-fix oscillation was at V=100
-// where the prior V_REF=100 left authority untouched.
-//   V=70: 1.000   V=100: 0.700   V=120: 0.500   V>=140: 0.300 (floor)
-// Effect vs no-scaling baseline: 6->16 SMOOTH, 18->8 OSCILLATING on the
-// 30-case envelope, peak roll rate at V=120 (full stick) ~95 deg/s.
-#define CONTROL_V_REF 70.0f
-#define CONTROL_SCALE_SLOPE 0.010f
-#define CONTROL_SCALE_MIN 0.300f
+// Dogfight 3.0 trained with full control authority at all speeds. Preserve
+// that behavior for learning parity; tune autopilot smoothness separately.
+#define CONTROL_V_REF 100.0f
+#define CONTROL_SCALE_SLOPE 0.0f
+#define CONTROL_SCALE_MIN 1.0f
 
 // Runtime-configurable physics parameters for parameter sweeps + domain randomization
 typedef struct {
@@ -241,7 +228,7 @@ static inline FlightParams default_flight_params(void) {
         .control_scale_slope = CONTROL_SCALE_SLOPE,
         .control_scale_min = CONTROL_SCALE_MIN,
         .damping_scale_slope = 0.0f,
-        .damping_multiplier = 1.15f,  // sweep_smoothness winner; 15% over JSBSim P-51D values
+        .damping_multiplier = 1.0f,
         .mass = MASS, .inv_mass = 1.0f / MASS,
         .ixx = IXX, .iyy = IYY, .izz = IZZ,
         .gravity = GRAVITY, .inv_gravity = 1.0f / GRAVITY,

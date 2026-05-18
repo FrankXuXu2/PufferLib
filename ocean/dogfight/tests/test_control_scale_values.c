@@ -7,10 +7,9 @@
  * ocean/dogfight/tests/test_flight_physics.c::test_high_speed_pitch_oscillation.
  * Do NOT re-port that here.
  *
- * 4.0 disabled the high-speed control authority scaling (slope=0, min=1.0),
- * so most of the 3.0 expected values will mismatch. That mismatch IS the
- * honest 1:1 result. Per-entry status is printed, but main() returns 0
- * (not a regression — a documented config change in flightlib.h:200-204).
+ * Dogfight 3.0 trained with full control authority at all speeds. Keep this
+ * test hard-failing so later smoothness tuning does not silently reduce the
+ * agent's actuator authority again.
  */
 #include <stdio.h>
 #include <math.h>
@@ -19,18 +18,17 @@
 
 typedef struct {
     int speed;
-    float expected;  // 3.0 expected scale (V_REF=80, SLOPE=0.007, MIN=0.35)
+    float expected;  // dogfight3 expected scale (no high-speed reduction)
 } Case;
 
-/* Same table as test_high_speed_oscillation.py:102-110, verbatim. */
 static const Case CASES[] = {
     { 80, 1.00f},
-    {100, 0.86f},
-    {120, 0.72f},
-    {140, 0.58f},
-    {160, 0.44f},
-    {180, 0.35f},
-    {200, 0.35f},
+    {100, 1.00f},
+    {120, 1.00f},
+    {140, 1.00f},
+    {160, 1.00f},
+    {180, 1.00f},
+    {200, 1.00f},
     { 60, 1.00f},
 };
 #define N_CASES (sizeof(CASES) / sizeof(CASES[0]))
@@ -45,7 +43,7 @@ static float control_scale(float speed) {
 }
 
 int main(void) {
-    printf("\nVerifying control scale formula (4.0 vs 3.0 expected)...\n");
+    printf("\nVerifying control scale formula against dogfight3...\n");
     printf("--------------------------------------------------------\n");
     printf("flightlib.h: V_REF=%.1f SLOPE=%.4f MIN=%.2f\n",
            CONTROL_V_REF, CONTROL_SCALE_SLOPE, CONTROL_SCALE_MIN);
@@ -57,17 +55,18 @@ int main(void) {
         int match = fabsf(scale - CASES[i].expected) < 0.001f;
         const char* status = match ? "OK" : "FAIL";
         if (match) ++n_ok; else ++n_diff;
-        printf("V=%3d m/s: scale=%.2f (3.0 expected %.2f) [%s]\n",
+        printf("V=%3d m/s: scale=%.2f (dogfight3 expected %.2f) [%s]\n",
                CASES[i].speed, scale, CASES[i].expected, status);
     }
 
     printf("--------------------------------------------------------\n");
-    printf("Matches 3.0: %d/%zu\n", n_ok, N_CASES);
-    if (n_diff > 0) {
-        printf("Note: 4.0 disabled high-speed authority scaling "
-               "(slope=0, min=1.0). 3.0 expected values are kept here for\n");
-        printf("      audit purposes; mismatches are the documented config "
-               "change, not a physics regression.\n");
+    printf("Matches dogfight3: %d/%zu\n", n_ok, N_CASES);
+
+    if (fabsf(default_flight_params().damping_multiplier - 1.0f) >= 0.001f) {
+        printf("damping_multiplier=%.2f (dogfight3 expected 1.00) [FAIL]\n",
+               default_flight_params().damping_multiplier);
+        ++n_diff;
     }
-    return 0;
+
+    return n_diff;
 }
