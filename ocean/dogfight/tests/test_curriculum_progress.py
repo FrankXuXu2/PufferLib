@@ -23,7 +23,7 @@ def main():
         "env": {"curriculum_enabled": 1},
         "curriculum": {
             "enabled": 1,
-            "initial_target": 0.0,
+            "initial_target": 0.9,
             "max_target": 2.0,
             "step": 1.0,
             "promote_threshold": 0.9,
@@ -32,8 +32,8 @@ def main():
     }
     backend = FakeBackend()
     state = setup_curriculum(args, backend, object())
-    assert state["target"] == 0.0
-    assert backend.targets == [0.0]
+    assert state["target"] == 0.9
+    assert backend.targets == [0.9]
 
     flat_logs = {
         "env/n": 200.0,
@@ -41,8 +41,8 @@ def main():
         "env/base_stage_kills": 0.4,
     }
     step_curriculum(state, backend, object(), flat_logs, epoch=1)
-    assert state["target"] == 0.0
-    assert backend.targets == [0.0]
+    assert state["target"] == 0.9
+    assert backend.targets == [0.9]
     assert abs(flat_logs["env/base_stage_kill_rate"] - 0.8) < 1e-6
 
     flat_logs = {
@@ -51,15 +51,15 @@ def main():
         "env/base_stage_kills": 0.46,
     }
     step_curriculum(state, backend, object(), flat_logs, epoch=2)
-    assert state["target"] == 1.0
-    assert backend.targets == [0.0, 1.0]
-    assert flat_logs["env/curriculum_target"] == 1.0
+    assert state["target"] == 1.9
+    assert backend.targets == [0.9, 1.9]
+    assert flat_logs["env/curriculum_target"] == 1.9
 
     step_curriculum(state, backend, object(), flat_logs, epoch=3)
     assert state["target"] == 2.0
     step_curriculum(state, backend, object(), flat_logs, epoch=4)
     assert state["target"] == 2.0
-    assert backend.targets == [0.0, 1.0, 2.0]
+    assert backend.targets == [0.9, 1.9, 2.0]
 
     print("  test_curriculum_progress          [OK]")
     return 0
