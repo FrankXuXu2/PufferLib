@@ -12,6 +12,11 @@ void my_set_curriculum_target(Env* env, float target) {
     set_curriculum_target(env, target);
 }
 
+static inline double dict_get_default(Dict* kwargs, const char* key, double fallback) {
+    DictItem* item = dict_get_unsafe(kwargs, key);
+    return item != NULL ? item->value : fallback;
+}
+
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
     env->max_steps = (int)dict_get(kwargs, "max_steps")->value;
@@ -37,6 +42,17 @@ void my_init(Env* env, Dict* kwargs) {
     };
 
     init(env, obs_scheme, &rcfg, curriculum_enabled, curriculum_randomize, env->rng);
+    RuntimeConfig runtime_cfg = {
+        .eval_spawn_mode = (int)dict_get_default(kwargs, "eval_spawn_mode", 0),
+        .recovery_enabled = (int)dict_get_default(kwargs, "recovery_enabled", 1),
+        .recovery_altitude_threshold = dict_get_default(kwargs, "recovery_altitude_threshold", 500.0),
+        .recovery_trigger_prob = dict_get_default(kwargs, "recovery_trigger_prob", 0.1),
+        .recovery_speed_threshold = dict_get_default(kwargs, "recovery_speed_threshold", 70.0),
+        .recovery_bank_deg = dict_get_default(kwargs, "recovery_bank_deg", 60.0),
+        .domain_randomization = dict_get_default(kwargs, "domain_randomization", 0.0),
+        .vertical_spawn_prob = dict_get_default(kwargs, "vertical_spawn_prob", 0.0),
+    };
+    apply_runtime_config(env, &runtime_cfg);
     c_reset(env);
 }
 

@@ -214,6 +214,30 @@ typedef struct RewardConfig {
     float energy_advantage_scale;  // Zero-sum energy advantage scale (default 0.004)
 } RewardConfig;
 
+typedef struct RuntimeConfig {
+    int eval_spawn_mode;
+    int recovery_enabled;
+    float recovery_altitude_threshold;
+    float recovery_trigger_prob;
+    float recovery_speed_threshold;
+    float recovery_bank_deg;
+    float domain_randomization;
+    float vertical_spawn_prob;
+} RuntimeConfig;
+
+static inline RuntimeConfig default_runtime_config(void) {
+    return (RuntimeConfig){
+        .eval_spawn_mode = 0,
+        .recovery_enabled = 1,
+        .recovery_altitude_threshold = 500.0f,
+        .recovery_trigger_prob = 0.1f,
+        .recovery_speed_threshold = 70.0f,
+        .recovery_bank_deg = 60.0f,
+        .domain_randomization = 0.0f,
+        .vertical_spawn_prob = 0.0f,
+    };
+}
+
 // Calculate shaping decay multiplier based on global training step
 // Returns 1.0 before decay_start, 0.0 after decay_end, linear interpolation between
 static inline float calc_shaping_decay(long global_step, long decay_start, long decay_end) {
@@ -403,6 +427,20 @@ typedef struct Dogfight {
     FlightParams flight_params;
     float domain_randomization;  // 0.0 = off, 0.1 = +/-10% per-episode variation
 } Dogfight;
+
+static inline void apply_runtime_config(Dogfight* env, const RuntimeConfig* cfg) {
+    env->eval_spawn_mode = cfg->eval_spawn_mode;
+    if (cfg->recovery_enabled) {
+        env->recovery_altitude_threshold = cfg->recovery_altitude_threshold;
+        env->recovery_trigger_prob = cfg->recovery_trigger_prob;
+        env->recovery_speed_threshold = cfg->recovery_speed_threshold;
+        env->recovery_bank_deg = cfg->recovery_bank_deg;
+    } else {
+        env->recovery_altitude_threshold = -9999.0f;
+    }
+    env->domain_randomization = cfg->domain_randomization;
+    env->vertical_spawn_prob = cfg->vertical_spawn_prob;
+}
 
 #include "dogfight_observations.h"
 
