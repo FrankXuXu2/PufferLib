@@ -3,9 +3,14 @@
 #define NUM_ATNS 5
 #define ACT_SIZES {1, 1, 1, 1, 1}
 #define OBS_TENSOR_T FloatTensor
+#define MY_CURRICULUM
 
 #define Env Dogfight
 #include "vecenv.h"
+
+void my_set_curriculum_target(Env* env, float target) {
+    set_curriculum_target(env, target);
+}
 
 void my_init(Env* env, Dict* kwargs) {
     env->num_agents = 1;
@@ -54,6 +59,8 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "stage", log->stage);
     dict_set(out, "avg_stage", log->stage_sum);
     dict_set(out, "avg_stage_weight", log->total_stage_weight);
+    dict_set(out, "base_stage_kills", log->base_stage_kills);
+    dict_set(out, "base_stage_eps", log->base_stage_eps);
 
     // Directional + control health (KEY: surfaces "always banks one direction")
     dict_set(out, "avg_abs_bias", log->total_abs_bias);

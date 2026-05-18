@@ -168,6 +168,58 @@ def validate_config(args):
     assert minibatch_size <= horizon * total_agents, \
         f'minibatch_size {minibatch_size} > total_agents {total_agents} * horizon {horizon}'
 
+def setup_curriculum(args, backend, pufferl):
+    cfg = args.get('curriculum', {})
+    if not cfg or not cfg.get('enabled', 0):
+        return None
+    if not args.get('env', {}).get('curriculum_enabled', 0):
+        return None
+    if not hasattr(backend, 'set_curriculum_target'):
+        return None
+
+    target = float(cfg.get('initial_target', 0.0))
+    state = {
+        'target': target,
+        'max_target': float(cfg.get('max_target', 18.0)),
+        'step': float(cfg.get('step', 1.0)),
+        'promote_threshold': float(cfg.get('promote_threshold', 0.90)),
+        'min_episodes': float(cfg.get('min_episodes', 1024)),
+    }
+    backend.set_curriculum_target(pufferl, target)
+    print(f'[CURRICULUM] target={target:.2f}', flush=True)
+    return state
+
+def step_curriculum(state, backend, pufferl, flat_logs, epoch):
+    if state is None:
+        return
+
+    n = float(flat_logs.get('env/n', 0.0))
+    base_eps = float(flat_logs.get('env/base_stage_eps', 0.0)) * n
+    flat_logs['env/curriculum_target'] = state['target']
+    if base_eps < state['min_episodes']:
+        return
+
+    base_kills = float(flat_logs.get('env/base_stage_kills', 0.0)) * n
+    kill_rate = base_kills / max(base_eps, 1.0)
+    flat_logs['env/base_stage_kill_rate'] = kill_rate
+
+    if kill_rate < state['promote_threshold']:
+        return
+
+    old_target = state['target']
+    new_target = min(state['max_target'], old_target + state['step'])
+    if new_target <= old_target:
+        return
+
+    state['target'] = new_target
+    backend.set_curriculum_target(pufferl, new_target)
+    flat_logs['env/curriculum_target'] = new_target
+    print(
+        f'[CURRICULUM] epoch={epoch} target {old_target:.2f} -> {new_target:.2f} '
+        f'kill_rate={kill_rate:.3f} episodes={base_eps:.0f}',
+        flush=True,
+    )
+
 def _resolve_backend(args):
     compiled_env = getattr(_C, 'env_name', None)
     assert compiled_env is None or compiled_env == args['env_name'], \
@@ -241,6 +293,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         if result_queue is not None:
             result_queue.put((args['gpu_id'], [], [], []))
         return
+    curriculum_state = setup_curriculum(args, backend, pufferl)
 
     model_path = ''
     flat_logs = {}
@@ -270,6 +323,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
 
         if epoch < train_epochs:
             selfplay.step(pufferl, backend, pool_state, flat_logs, epoch)
+            step_curriculum(curriculum_state, backend, pufferl, flat_logs, epoch)
 
         if verbose:
             print_dashboard(args, model_size, flat_logs)

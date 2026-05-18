@@ -147,6 +147,10 @@ void static_vec_set_perm(StaticVec* vec, const int* perm);
 void static_vec_set_env_tags(StaticVec* vec, const int* tags);
 int static_vec_count_aligned(StaticVec* vec, int tag_value, int reset_flags);
 
+// Optional curriculum control. Env must opt in via MY_CURRICULUM and provide
+// my_set_curriculum_target; otherwise this is a no-op.
+void static_vec_set_curriculum_target(StaticVec* vec, float target);
+
 // Optional shared state functions
 void* my_shared(void* env, Dict* kwargs);
 void my_shared_close(void* env);
@@ -214,6 +218,10 @@ void my_log(Log* log, Dict* out);
 // base for slot 0. Reads vec->agent_perm (NULL = identity) to compute physical
 // indices into vec global buffers.
 void my_setup_perm(StaticVec* vec, Env* env, int slot_base);
+#endif
+
+#ifdef MY_CURRICULUM
+void my_set_curriculum_target(Env* env, float target);
 #endif
 
 
@@ -560,6 +568,18 @@ int static_vec_count_aligned(StaticVec* vec, int tag_value, int reset_flags) {
     return 0;
 }
 #endif
+
+void static_vec_set_curriculum_target(StaticVec* vec, float target) {
+#ifdef MY_CURRICULUM
+    Env* envs = (Env*)vec->envs;
+    for (int i = 0; i < vec->size; i++) {
+        my_set_curriculum_target(&envs[i], target);
+    }
+#else
+    (void)vec;
+    (void)target;
+#endif
+}
 
 void static_vec_reset(StaticVec* vec) {
     Env* envs = (Env*)vec->envs;

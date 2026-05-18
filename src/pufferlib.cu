@@ -1900,6 +1900,10 @@ extern "C" int pufferl_count_aligned(PuffeRL* pufferl, int tag_value, int reset_
     return static_vec_count_aligned(pufferl->vec, tag_value, reset_flags);
 }
 
+extern "C" void pufferl_set_curriculum_target(PuffeRL* pufferl, float target) {
+    static_vec_set_curriculum_target(pufferl->vec, target);
+}
+
 extern "C" int pufferl_num_envs(PuffeRL* pufferl) {
     return pufferl->vec->size;
 }

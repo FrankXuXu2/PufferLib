@@ -254,6 +254,11 @@ int py_count_aligned(py::object pufferl_obj, int tag_value, int reset_flags) {
     return pufferl_count_aligned(&pufferl, tag_value, reset_flags);
 }
 
+void py_set_curriculum_target(py::object pufferl_obj, float target) {
+    PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
+    pufferl_set_curriculum_target(&pufferl, target);
+}
+
 int py_num_envs(py::object pufferl_obj) {
     PuffeRL& pufferl = pufferl_obj.cast<PuffeRL&>();
     return pufferl_num_envs(&pufferl);
@@ -524,6 +529,7 @@ PYBIND11_MODULE(_C, m) {
     m.def("set_agent_perm", &py_set_agent_perm);
     m.def("set_env_tags", &py_set_env_tags);
     m.def("count_aligned", &py_count_aligned);
+    m.def("set_curriculum_target", &py_set_curriculum_target);
     m.def("num_envs", &py_num_envs);
     m.def("python_vec_recv", &python_vec_recv);
     m.def("python_vec_send", &python_vec_send);
@@ -614,6 +620,9 @@ PYBIND11_MODULE(_C, m) {
         .def("gpu_step", &gpu_vec_step_py)
         .def("cpu_step", &cpu_vec_step_py)
         .def("render", [](VecEnv& ve, int env_id) { static_vec_render(ve.vec, env_id); })
+        .def("set_curriculum_target", [](VecEnv& ve, float target) {
+            static_vec_set_curriculum_target(ve.vec, target);
+        })
         .def("log",   &vec_log)
         .def("close", &vec_close);
 

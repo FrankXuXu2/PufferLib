@@ -182,6 +182,9 @@ PYBIND11_MODULE(_C, m) {
         .def("reset", &vec_reset)
         .def("cpu_step", &cpu_vec_step_py)
         .def("render", [](VecEnv& ve, int env_id) { static_vec_render(ve.vec, env_id); })
+        .def("set_curriculum_target", [](VecEnv& ve, float target) {
+            static_vec_set_curriculum_target(ve.vec, target);
+        })
         .def("log", &vec_log)
         .def("close", &vec_close);
 }
