@@ -963,6 +963,10 @@ void c_step(Dogfight *env) {
     env->rewards[0] = 0.0f;
     env->terminals[0] = 0;
 
+    for (int i = 0; i < 5; i++) {
+        env->actions[i] = clampf(env->actions[i], -1.0f, 1.0f);
+    }
+
     if (DEBUG >= 10) printf("\n========== TICK %d ==========\n", env->tick);
     if (DEBUG >= 10) printf("=== ACTIONS ===\n");
     if (DEBUG >= 10) printf("throttle_raw=%.3f -> throttle=%.3f\n", env->actions[0], (env->actions[0] + 1.0f) * 0.5f);
