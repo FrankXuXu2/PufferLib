@@ -8,9 +8,19 @@ hyperparameters are the bottleneck before changing Dogfight behavior again.
 
 ```bash
 cd /home/claude/PufferLib
+source .venv/bin/activate
 CC=clang bash ocean/dogfight/tests/run_all.sh
-PATH=.venv/bin:/usr/local/cuda-12.8/bin:$PATH CUDA_HOME=/usr/local/cuda-12.8 CCACHE_DIR=/tmp/ccache CC=clang ./build.sh dogfight
+./build.sh dogfight
 ```
+
+The local `.venv/bin/activate` hook sources `scripts/puffer_cuda_env.sh`, so
+`source .venv/bin/activate && ./build.sh dogfight` is expected to work on WSL
+g240. If `.venv` is recreated, run
+`scripts/install_puffer_cuda_venv_hook.sh` again or source
+`scripts/puffer_cuda_env.sh` before building.
+
+GPU train and sweep runs must run outside the Codex sandbox so CUDA device
+visibility, `ccache`, and NVIDIA libraries are available.
 
 ## Smoke Probe
 
@@ -49,9 +59,24 @@ python ocean/dogfight/sweep_hypers.py \
 cat /tmp/dogfight_sweep_200m_random/summary.csv
 ```
 
-The Dogfight-local runner is preferred here over `pufferlib.pufferl sweep`
-because it preserves full trial logs and summarizes curriculum-specific metrics
-such as `base_stage_kills`, `player_ground`, action saturation, and signed bias.
+The Dogfight config sets the official PufferLib sweep objective to
+`env/curriculum_target`, so `pufferlib.pufferl sweep dogfight` can be used when
+we want Protein to suggest hypers directly. The Dogfight-local runner remains
+useful when we want resumable per-trial stdout logs and a CSV summary of
+curriculum-specific diagnostics such as `base_stage_kills`, `player_ground`,
+action saturation, and signed bias.
+
+On WSL, official sweep smoke commands must keep Protein GP tensors on CPU while
+the trainer uses GPU:
+
+```bash
+python -m pufferlib.pufferl sweep dogfight \
+  --sweep.max-runs 1 \
+  --sweep.gpus 1 \
+  --train.gpus 1 \
+  --train.total-timesteps 262144 \
+  --sweep.use-gpu ""
+```
 
 Crash handling:
 
