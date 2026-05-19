@@ -12,7 +12,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
+import random
 import re
 import shlex
 import subprocess
@@ -56,6 +58,27 @@ TRIALS: list[tuple[str, dict[str, str]]] = [
     ),
     ("policy_256", {"policy.hidden-size": "256"}),
 ]
+
+RANDOM_SPACE: dict[str, tuple[str, float | int, float | int]] = {
+    "train.learning-rate": ("log", 0.00008, 0.0008),
+    "train.ent-coef": ("log", 0.0008, 0.02),
+    "train.clip-coef": ("linear", 0.06, 0.30),
+    "train.vf-coef": ("linear", 0.5, 4.0),
+    "train.vf-clip-coef": ("linear", 0.2, 3.0),
+    "train.max-grad-norm": ("linear", 0.5, 3.0),
+    "train.beta1": ("linear", 0.90, 0.995),
+    "train.beta2": ("linear", 0.90, 0.999),
+    "train.vtrace-rho-clip": ("linear", 0.8, 4.0),
+    "train.vtrace-c-clip": ("linear", 0.8, 4.0),
+    "train.prio-alpha": ("linear", 0.5, 1.0),
+    "train.prio-beta0": ("linear", 0.2, 1.0),
+}
+
+DISCRETE_RANDOM_SPACE: dict[str, tuple[str, ...]] = {
+    "train.replay-ratio": ("0.5", "1.0", "1.5", "2.0"),
+    "policy.hidden-size": ("128", "256"),
+    "policy.num-layers": ("2", "3"),
+}
 
 METRICS = [
     "SPS",
@@ -168,7 +191,12 @@ def write_summary(rows: list[dict[str, object]], path: Path) -> None:
             writer.writerow(row)
 
 
-def command_for_trial(steps: int, overrides: dict[str, str]) -> list[str]:
+def command_for_trial(
+    steps: int,
+    overrides: dict[str, str],
+    wandb_project: str | None = None,
+    wandb_group: str | None = None,
+) -> list[str]:
     cmd = [
         str(REPO / ".venv/bin/python"),
         "-m",
@@ -178,6 +206,10 @@ def command_for_trial(steps: int, overrides: dict[str, str]) -> list[str]:
         "--train.total-timesteps",
         str(steps),
     ]
+    if wandb_project:
+        cmd.extend(["--wandb", "--wandb-project", wandb_project])
+    if wandb_group:
+        cmd.extend(["--wandb-group", wandb_group])
     for key, value in overrides.items():
         cmd.extend([f"--{key}", str(value)])
     return cmd
@@ -194,12 +226,19 @@ def env_for_run() -> dict[str, str]:
     return env
 
 
-def run_trial(name: str, overrides: dict[str, str], steps: int, out_dir: Path) -> dict[str, object]:
+def run_trial(
+    name: str,
+    overrides: dict[str, str],
+    steps: int,
+    out_dir: Path,
+    wandb_project: str | None,
+    wandb_group: str | None,
+) -> dict[str, object]:
     trial_dir = out_dir / name
     trial_dir.mkdir(parents=True, exist_ok=True)
     log_path = trial_dir / "train.log"
     meta_path = trial_dir / "trial.json"
-    cmd = command_for_trial(steps, overrides)
+    cmd = command_for_trial(steps, overrides, wandb_project, wandb_group)
     meta = {
         "trial": name,
         "steps": steps,
@@ -255,11 +294,40 @@ def selected_trials(names: str) -> list[tuple[str, dict[str, str]]]:
     return [(name, trial_map[name]) for name in wanted]
 
 
+def sample_value(kind: str, low: float | int, high: float | int, rng: random.Random) -> str:
+    if kind == "log":
+        value = 10 ** rng.uniform(math.log10(float(low)), math.log10(float(high)))
+    elif kind == "linear":
+        value = rng.uniform(float(low), float(high))
+    else:
+        raise ValueError(f"unknown sample kind {kind}")
+    return f"{value:.6g}"
+
+
+def random_trials(max_runs: int, seed: int) -> list[tuple[str, dict[str, str]]]:
+    rng = random.Random(seed)
+    trials: list[tuple[str, dict[str, str]]] = [("baseline", {})]
+    for idx in range(1, max_runs):
+        overrides = {
+            key: sample_value(kind, low, high, rng)
+            for key, (kind, low, high) in RANDOM_SPACE.items()
+        }
+        for key, choices in DISCRETE_RANDOM_SPACE.items():
+            overrides[key] = rng.choice(choices)
+        trials.append((f"random_{idx:04d}", overrides))
+    return trials
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=50_000_000)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
     parser.add_argument("--trials", default="all", help="Comma list of trials, or all")
+    parser.add_argument("--search", choices=("fixed", "random"), default="fixed")
+    parser.add_argument("--max-runs", type=int, default=0)
+    parser.add_argument("--seed", type=int, default=37)
+    parser.add_argument("--wandb-project", default="")
+    parser.add_argument("--wandb-group", default="")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--summarize", type=Path, help="Summarize an existing sweep directory")
@@ -283,13 +351,30 @@ def main() -> int:
         print(f"Wrote {summary_path}")
         return 0
 
-    trials = selected_trials(args.trials)
+    if args.search == "random":
+        max_runs = args.max_runs or 100
+        trials = random_trials(max_runs, args.seed)
+    else:
+        trials = selected_trials(args.trials)
+        if args.max_runs:
+            trials = trials[: args.max_runs]
     args.log_dir.mkdir(parents=True, exist_ok=True)
 
     if args.dry_run:
         for name, overrides in trials:
             print(name)
-            print("  " + " ".join(shlex.quote(part) for part in command_for_trial(args.steps, overrides)))
+            print(
+                "  "
+                + " ".join(
+                    shlex.quote(part)
+                    for part in command_for_trial(
+                        args.steps,
+                        overrides,
+                        args.wandb_project or None,
+                        args.wandb_group or None,
+                    )
+                )
+            )
         return 0
 
     if not args.skip_build:
@@ -299,7 +384,14 @@ def main() -> int:
     summary_path = args.log_dir / "summary.csv"
     failed = False
     for name, overrides in trials:
-        row = run_trial(name, overrides, args.steps, args.log_dir)
+        row = run_trial(
+            name,
+            overrides,
+            args.steps,
+            args.log_dir,
+            args.wandb_project or None,
+            args.wandb_group or None,
+        )
         rows.append(row)
         failed = failed or not str(row["status"]).startswith("ok")
         write_summary(rows, summary_path)

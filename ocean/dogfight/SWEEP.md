@@ -32,6 +32,27 @@ python ocean/dogfight/sweep_hypers.py --steps 50000000 --trials all --log-dir /t
 cat /tmp/dogfight_sweep_50m/summary.csv
 ```
 
+For the first real hyperparameter search, cap each trial at `200M` timesteps and
+log to W&B project `df37`. This does not try to finish training; it checks
+whether Dogfight can move beyond the current post-promotion plateau under sane
+PufferLib 4 optimizer settings.
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --search random \
+  --max-runs 1000 \
+  --steps 200000000 \
+  --wandb-project df37 \
+  --wandb-group dogfight-200m-random \
+  --log-dir /tmp/dogfight_sweep_200m_random
+
+cat /tmp/dogfight_sweep_200m_random/summary.csv
+```
+
+The Dogfight-local runner is preferred here over `pufferlib.pufferl sweep`
+because it preserves full trial logs and summarizes curriculum-specific metrics
+such as `base_stage_kills`, `player_ground`, action saturation, and signed bias.
+
 For a longer confirmation of only the best candidates, pass a comma-separated
 trial list:
 
