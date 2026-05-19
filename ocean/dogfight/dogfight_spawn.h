@@ -28,22 +28,6 @@ static void spawn_tail_chase(Dogfight *env, Vec3 player_pos, Vec3 player_vel) {
     float y_sign = rndf(0, 1) > 0.5f ? 1.0f : -1.0f;
     float y_offset = y_sign * rndf(26, 50);
 
-    // 20% chance: spawn player LOW (400m) with opponent ABOVE
-    // Teaches altitude awareness early - don't descend with target
-    if (rndf(0, 1) < 0.2f) {
-        env->player.pos.z = 400.0f;  // Just below 500m recovery threshold
-        Vec3 opp_pos = vec3(
-            player_pos.x + rndf(200, 400),
-            player_pos.y + y_offset,
-            700.0f + rndf(0, 200)  // Opponent 300-500m above player
-        );
-        reset_plane(&env->opponent, opp_pos, player_vel);
-        env->opponent_ap.mode = AP_STRAIGHT;
-        // More time for climb + pursuit in altitude-disadvantage variant
-        env->max_steps = 2000;
-        return;
-    }
-
     Vec3 opp_pos = vec3(
         player_pos.x + rndf(200, 400),
         player_pos.y + y_offset,        // Min 26m = ~5° at 300m
@@ -55,23 +39,6 @@ static void spawn_tail_chase(Dogfight *env, Vec3 player_pos, Vec3 player_vel) {
 
 // Stage 1: HEAD_ON - Opponent coming toward us
 static void spawn_head_on(Dogfight *env, Vec3 player_pos, Vec3 player_vel) {
-    // 20% chance: spawn player LOW with opponent coming from ABOVE
-    // Teaches: don't dive into head-on, maintain altitude
-    if (rndf(0, 1) < 0.2f) {
-        env->player.pos.z = 400.0f;  // Just below 500m recovery threshold
-        Vec3 opp_pos = vec3(
-            player_pos.x + rndf(400, 600),
-            player_pos.y + rndf(-50, 50),
-            700.0f + rndf(0, 200)  // Opponent 300-500m above
-        );
-        Vec3 opp_vel = vec3(-player_vel.x, -player_vel.y, player_vel.z);
-        reset_plane(&env->opponent, opp_pos, opp_vel);
-        env->opponent_ap.mode = AP_STRAIGHT;
-        // More time for climb + pursuit in altitude-disadvantage variant
-        env->max_steps = 2000;
-        return;
-    }
-
     // Opponent 400-600m ahead, facing us (opposite velocity)
     Vec3 opp_pos = vec3(
         player_pos.x + rndf(400, 600),
@@ -129,6 +96,7 @@ static void spawn_gentle_turns(Dogfight *env, Vec3 player_pos, Vec3 player_vel) 
     // 20% chance: spawn player LOW with opponent turning ABOVE
     // Teaches: climb while pursuing turning target
     if (rndf(0, 1) < 0.2f) {
+        env->low_altitude_variant = 1;
         env->player.pos.z = 400.0f;  // Just below 500m recovery threshold
         Vec3 opp_pos = vec3(
             player_pos.x + rndf(200, 500),

@@ -165,6 +165,8 @@ typedef struct Log {
     float total_control_rate;       // Sum of per-episode mean squared deltas (exported as avg_control_rate)
     float base_stage_kills;         // Kills at int(curriculum_target) - for per-stage gating
     float base_stage_eps;           // Episodes at int(curriculum_target) - for per-stage gating
+    float low_alt_variant_eps;      // Episodes spawned in a low-altitude curriculum variant
+    float low_alt_variant_ticks;    // Ticks spent in low-altitude curriculum variants
 
     // Death spiral diagnostics - exported to Python/wandb
     float player_ground_hits;       // Player crashed into ground
@@ -172,6 +174,16 @@ typedef struct Log {
     float recovery_triggers;        // Recovery hijacking activated
     float clean_fights;             // Episodes ending in kills or timeouts (not crashes)
     float altitude_kills;           // Kills from forcing opponent crash at safe altitude
+
+    // Action diagnostics - per-episode means accumulated as raw sums
+    float action_abs_elevator;
+    float action_abs_aileron;
+    float action_abs_rudder;
+    float action_abs_trigger;
+    float action_sat_elevator;
+    float action_sat_aileron;
+    float action_sat_rudder;
+    float action_sat_trigger;
 
     // PER-ENV RATIOS - for C debugging only, NOT exported (garbage after vec_log aggregation)
     float avg_stage_weight;         // = total_stage_weight / n (per-env only)
@@ -322,6 +334,15 @@ typedef struct Dogfight {
     float total_aileron_usage;  // Accumulated |aileron| input (for spin death)
     float aileron_bias;         // Cumulative signed aileron (for directional penalty)
     float episode_control_rate; // Sum of squared control deltas this episode
+    int low_altitude_variant;   // 1 when spawned in an explicitly low-altitude curriculum variant
+    float episode_action_abs_elevator;
+    float episode_action_abs_aileron;
+    float episode_action_abs_rudder;
+    float episode_action_abs_trigger;
+    float episode_action_sat_elevator;
+    float episode_action_sat_aileron;
+    float episode_action_sat_rudder;
+    float episode_action_sat_trigger;
     // Episode reward accumulators (for DEBUG summaries)
     float sum_r_closing;
     float sum_r_speed;      // Stall penalty
@@ -485,6 +506,15 @@ void init(Dogfight *env, int obs_scheme, RewardConfig *rcfg, int curriculum_enab
     }
     env->is_initialized = 1;
     env->total_aileron_usage = 0.0f;
+    env->low_altitude_variant = 0;
+    env->episode_action_abs_elevator = 0.0f;
+    env->episode_action_abs_aileron = 0.0f;
+    env->episode_action_abs_rudder = 0.0f;
+    env->episode_action_abs_trigger = 0.0f;
+    env->episode_action_sat_elevator = 0.0f;
+    env->episode_action_sat_aileron = 0.0f;
+    env->episode_action_sat_rudder = 0.0f;
+    env->episode_action_sat_trigger = 0.0f;
 
     // Initialize previous actions for control rate penalty
     env->prev_elevator = 0.0f;
@@ -746,7 +776,20 @@ void add_log(Dogfight *env) {
     env->log.total_signed_bias += env->aileron_bias;
     env->log.stage_sum += (float)env->stage;  // Accumulate for avg_stage
     // Mean squared control delta per step this episode (lower = smoother control)
-    env->log.total_control_rate += env->episode_control_rate / fmaxf((float)env->tick, 1.0f);
+    float episode_ticks = fmaxf((float)env->tick, 1.0f);
+    env->log.total_control_rate += env->episode_control_rate / episode_ticks;
+    if (env->low_altitude_variant) {
+        env->log.low_alt_variant_eps += 1.0f;
+        env->log.low_alt_variant_ticks += (float)env->tick;
+    }
+    env->log.action_abs_elevator += env->episode_action_abs_elevator / episode_ticks;
+    env->log.action_abs_aileron += env->episode_action_abs_aileron / episode_ticks;
+    env->log.action_abs_rudder += env->episode_action_abs_rudder / episode_ticks;
+    env->log.action_abs_trigger += env->episode_action_abs_trigger / episode_ticks;
+    env->log.action_sat_elevator += env->episode_action_sat_elevator / episode_ticks;
+    env->log.action_sat_aileron += env->episode_action_sat_aileron / episode_ticks;
+    env->log.action_sat_rudder += env->episode_action_sat_rudder / episode_ticks;
+    env->log.action_sat_trigger += env->episode_action_sat_trigger / episode_ticks;
 
     // Track performance at MAJORITY stage (the one we're trying to master)
     // At target 0.9, majority is stage 1 (90% of episodes), not stage 0
@@ -902,6 +945,15 @@ void c_reset(Dogfight *env) {
     env->sum_throttle = 0.0f;
     env->trigger_pulls = 0;
     env->prev_trigger = 0;
+    env->low_altitude_variant = 0;
+    env->episode_action_abs_elevator = 0.0f;
+    env->episode_action_abs_aileron = 0.0f;
+    env->episode_action_abs_rudder = 0.0f;
+    env->episode_action_abs_trigger = 0.0f;
+    env->episode_action_sat_elevator = 0.0f;
+    env->episode_action_sat_aileron = 0.0f;
+    env->episode_action_sat_rudder = 0.0f;
+    env->episode_action_sat_trigger = 0.0f;
 
     // Head-on lockout (only set by spawn_eval_random for head-on spawns)
     env->head_on_lockout = 0;
@@ -1012,6 +1064,15 @@ void c_step(Dogfight *env) {
     if (DEBUG >= 10) printf("ailerons=%.3f -> roll_rate=%.3f rad/s\n", env->actions[2], env->actions[2] * MAX_ROLL_RATE);
     if (DEBUG >= 10) printf("rudder=%.3f -> yaw_rate=%.3f rad/s\n", env->actions[3], -env->actions[3] * MAX_YAW_RATE);
     if (DEBUG >= 10) printf("trigger=%.3f (fires if >0.5)\n", env->actions[4]);
+
+    env->episode_action_abs_elevator += fabsf(env->actions[1]);
+    env->episode_action_abs_aileron += fabsf(env->actions[2]);
+    env->episode_action_abs_rudder += fabsf(env->actions[3]);
+    env->episode_action_abs_trigger += fabsf(env->actions[4]);
+    env->episode_action_sat_elevator += (fabsf(env->actions[1]) >= 0.99f) ? 1.0f : 0.0f;
+    env->episode_action_sat_aileron += (fabsf(env->actions[2]) >= 0.99f) ? 1.0f : 0.0f;
+    env->episode_action_sat_rudder += (fabsf(env->actions[3]) >= 0.99f) ? 1.0f : 0.0f;
+    env->episode_action_sat_trigger += (fabsf(env->actions[4]) >= 0.99f) ? 1.0f : 0.0f;
 
     // Player uses full physics with actions (with runtime-configurable params)
     step_plane_with_params(&env->player, env->actions, DT, &env->flight_params);

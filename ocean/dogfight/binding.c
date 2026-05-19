@@ -77,11 +77,21 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "avg_stage_weight", log->total_stage_weight);
     dict_set(out, "base_stage_kills", log->base_stage_kills);
     dict_set(out, "base_stage_eps", log->base_stage_eps);
+    dict_set(out, "low_alt_variant_eps", log->low_alt_variant_eps);
+    dict_set(out, "low_alt_variant_ticks", log->low_alt_variant_ticks);
 
     // Directional + control health (KEY: surfaces "always banks one direction")
     dict_set(out, "avg_abs_bias", log->total_abs_bias);
     dict_set(out, "avg_signed_bias", log->total_signed_bias);
     dict_set(out, "avg_control_rate", log->total_control_rate);
+    dict_set(out, "action_abs_elevator", log->action_abs_elevator);
+    dict_set(out, "action_abs_aileron", log->action_abs_aileron);
+    dict_set(out, "action_abs_rudder", log->action_abs_rudder);
+    dict_set(out, "action_abs_trigger", log->action_abs_trigger);
+    dict_set(out, "action_sat_elevator", log->action_sat_elevator);
+    dict_set(out, "action_sat_aileron", log->action_sat_aileron);
+    dict_set(out, "action_sat_rudder", log->action_sat_rudder);
+    dict_set(out, "action_sat_trigger", log->action_sat_trigger);
 
     // Death-mode diagnostics
     dict_set(out, "player_ground", log->player_ground_hits);
