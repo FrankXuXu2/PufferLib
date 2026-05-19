@@ -98,11 +98,12 @@ static void spawn_vertical_premerge(struct Dogfight *env, Vec3 player_pos, Vec3 
 // Updated 2026-01-25 to split SIDE_CHASE into 3 stages (SIDE_NEAR, SIDE_MID, SIDE_FAR)
 // Updated 2026-01-26: Consolidated spawn_side/spawn_rear functions use angle fields
 // Updated 2026-01-27: Added DIVE_ATTACK (10) and ZOOM_ATTACK (11) stages
-// max_steps field is now for documentation only; episode length comes from Python config
+// max_steps field documents each stage's intended cap. Early stages may override
+// the Python config locally when the lesson needs a longer bounded engagement.
 static const StageConfig STAGES[CURRICULUM_COUNT] = {
     // n   spawn_fn               description                          weight  max_steps  ang_min ang_max bank
     {0,  spawn_tail_chase,       "Target ahead, same heading",         0.01f,  300,       0,      10,     0},
-    {1,  spawn_head_on,          "Target coming toward us",            0.02f,  300,       170,    180,    0},
+    {1,  spawn_head_on,          "Target coming toward us",            0.02f,  500,       170,    180,    0},
     {2,  spawn_vertical,         "Target above/below",                 0.05f,  500,       0,      20,     0},
     {3,  spawn_gentle_turns,     "Target ahead, 30 deg turns",         0.10f,  1000,      0,      30,     30},
     {4,  spawn_offset,           "Large lateral offset, 30 deg turns", 0.15f,  1000,      0,      45,     30},

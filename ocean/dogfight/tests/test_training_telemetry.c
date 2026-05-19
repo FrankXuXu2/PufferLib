@@ -24,13 +24,13 @@ static int setup_curriculum_env(TestEnv* t, int stage) {
     return 0;
 }
 
-static int test_stage_has_no_low_alt_variant(int stage) {
+static int test_stage_has_no_low_alt_variant(int stage, int expected_max_steps) {
     TestEnv t;
     setup_curriculum_env(&t, stage);
 
     for (int i = 0; i < 1000; i++) {
         c_reset(&t.env);
-        if (t.env.low_altitude_variant || t.env.max_steps != 300) {
+        if (t.env.low_altitude_variant || t.env.max_steps != expected_max_steps) {
             printf("low_alt_stage%d: low_alt=%d max_steps=%d [FAIL]\n",
                     stage, t.env.low_altitude_variant, t.env.max_steps);
             return 1;
@@ -113,8 +113,8 @@ static int test_action_telemetry(void) {
 int main(void) {
     srand(42);
     int fails = 0;
-    fails += test_stage_has_no_low_alt_variant(0);
-    fails += test_stage_has_no_low_alt_variant(1);
+    fails += test_stage_has_no_low_alt_variant(0, 300);
+    fails += test_stage_has_no_low_alt_variant(1, 500);
     fails += test_low_alt_variant_log_for_stage(3);
     fails += test_action_telemetry();
     return fails;

@@ -48,6 +48,7 @@ static void spawn_head_on(Dogfight *env, Vec3 player_pos, Vec3 player_vel) {
     Vec3 opp_vel = vec3(-player_vel.x, -player_vel.y, player_vel.z);
     reset_plane(&env->opponent, opp_pos, opp_vel);
     env->opponent_ap.mode = AP_STRAIGHT;
+    env->max_steps = 500;
 }
 
 // Stage 18: CROSSING - 45 degree deflection shots (reduced from 90° - see CURRICULUM_PLANS.md)
@@ -84,6 +85,7 @@ static void spawn_vertical(Dogfight *env, Vec3 player_pos, Vec3 player_vel) {
     );
     reset_plane(&env->opponent, opp_pos, player_vel);
     env->opponent_ap.mode = AP_LEVEL;  // Maintain altitude
+    env->max_steps = 500;
 
     // Speed boost only when opponent is ABOVE us (climbing needs energy, diving doesn't)
     if (opp_pos.z > player_pos.z) {
