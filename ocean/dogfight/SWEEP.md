@@ -53,6 +53,17 @@ The Dogfight-local runner is preferred here over `pufferlib.pufferl sweep`
 because it preserves full trial logs and summarizes curriculum-specific metrics
 such as `base_stage_kills`, `player_ground`, action saturation, and signed bias.
 
+Crash handling:
+
+- each trial writes `trial.json` before launching training;
+- each trial streams the full process output to `train.log`;
+- after every completed or crashed trial, the runner rewrites `summary.csv` and
+  `summary.jsonl`;
+- if the runner is restarted with the same `--log-dir`, existing `train.log`
+  files are parsed and skipped instead of overwritten;
+- logs containing `traceback`, `exception`, `assert`, `nan`, or `crash` are
+  marked failed in the summary.
+
 For a longer confirmation of only the best candidates, pass a comma-separated
 trial list:
 

@@ -196,12 +196,11 @@ def step_curriculum(state, backend, pufferl, flat_logs, epoch):
     n = float(flat_logs.get('env/n', 0.0))
     base_eps = float(flat_logs.get('env/base_stage_eps', 0.0)) * n
     flat_logs['env/curriculum_target'] = state['target']
-    if base_eps < state['min_episodes']:
-        return
-
     base_kills = float(flat_logs.get('env/base_stage_kills', 0.0)) * n
     kill_rate = base_kills / max(base_eps, 1.0)
     flat_logs['env/base_stage_kill_rate'] = kill_rate
+    if base_eps < state['min_episodes']:
+        return
 
     if kill_rate < state['promote_threshold']:
         return

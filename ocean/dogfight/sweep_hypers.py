@@ -189,6 +189,10 @@ def write_summary(rows: list[dict[str, object]], path: Path) -> None:
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
+    jsonl_path = path.with_suffix(".jsonl")
+    with jsonl_path.open("w") as f:
+        for row in rows:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
 
 
 def command_for_trial(
@@ -272,6 +276,8 @@ def run_trial(
         status = f"failed:{rc}"
 
     summary = parse_log(log_path)
+    if status == "ok" and summary.get("error"):
+        status = f"failed:{summary['error']}"
     summary.update(
         {
             "trial": name,
@@ -281,6 +287,20 @@ def run_trial(
         }
     )
     return summary
+
+
+def summarize_existing_trial(name: str, trial_dir: Path) -> dict[str, object]:
+    log_path = trial_dir / "train.log"
+    row = parse_log(log_path)
+    row["trial"] = name
+    row["status"] = f"parsed_failed:{row['error']}" if row.get("error") else "parsed"
+    row["seconds"] = ""
+    row["overrides"] = ""
+    trial_json = trial_dir / "trial.json"
+    if trial_json.exists():
+        meta = json.loads(trial_json.read_text())
+        row["overrides"] = json.dumps(meta.get("overrides", {}), sort_keys=True)
+    return row
 
 
 def selected_trials(names: str) -> list[tuple[str, dict[str, str]]]:
@@ -336,15 +356,7 @@ def main() -> int:
     if args.summarize:
         rows = []
         for log_path in sorted(args.summarize.glob("*/train.log")):
-            row = parse_log(log_path)
-            trial_json = log_path.with_name("trial.json")
-            row["trial"] = log_path.parent.name
-            row["status"] = "parsed"
-            row["seconds"] = ""
-            row["overrides"] = ""
-            if trial_json.exists():
-                meta = json.loads(trial_json.read_text())
-                row["overrides"] = json.dumps(meta.get("overrides", {}), sort_keys=True)
+            row = summarize_existing_trial(log_path.parent.name, log_path.parent)
             rows.append(row)
         summary_path = args.summarize / "summary.csv"
         write_summary(rows, summary_path)
@@ -384,16 +396,22 @@ def main() -> int:
     summary_path = args.log_dir / "summary.csv"
     failed = False
     for name, overrides in trials:
-        row = run_trial(
-            name,
-            overrides,
-            args.steps,
-            args.log_dir,
-            args.wandb_project or None,
-            args.wandb_group or None,
-        )
+        trial_dir = args.log_dir / name
+        if (trial_dir / "train.log").exists():
+            row = summarize_existing_trial(name, trial_dir)
+            print(f"Skipping existing trial {name}; parsed {trial_dir / 'train.log'}")
+        else:
+            row = run_trial(
+                name,
+                overrides,
+                args.steps,
+                args.log_dir,
+                args.wandb_project or None,
+                args.wandb_group or None,
+            )
         rows.append(row)
-        failed = failed or not str(row["status"]).startswith("ok")
+        status = str(row["status"])
+        failed = failed or not (status.startswith("ok") or status == "parsed")
         write_summary(rows, summary_path)
         print(f"Wrote {summary_path}", flush=True)
 
