@@ -1514,11 +1514,12 @@ void spawn_by_curriculum(Dogfight *env, Vec3 player_pos, Vec3 player_vel) {
     if (env->stage < CURRICULUM_COUNT) {
         STAGES[env->stage].spawn(env, player_pos, player_vel);
 
-        // Use per-stage max_steps for advanced stages (8+) where episode length matters
+        // Use per-stage max_steps for medium side-pursuit and later stages
+        // where the target can be outside immediate gun-range geometry.
         // Earlier stages use global max_steps from Python config for fast iteration
         // The original "training regression" was from variable episode lengths during early training
-        // By stage 8+, agents are stable enough to handle longer episodes
-        if (env->stage >= CURRICULUM_SIDE_FAR) {  // Stage 8+
+        // By stage 7+, agents are stable enough to handle longer episodes
+        if (env->stage >= CURRICULUM_SIDE_MID) {  // Stage 7+
             env->max_steps = STAGES[env->stage].max_steps;
         }
         // else: keep env->max_steps from Python init (already set)

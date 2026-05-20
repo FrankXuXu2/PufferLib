@@ -87,11 +87,71 @@ static int test_stage2_vertical_gets_climb_time(void) {
     return 0;
 }
 
+static int test_stage6_side_near_stays_configured(void) {
+    TestEnv t;
+    memset(&t, 0, sizeof(t));
+    t.env.num_agents = 1;
+    t.env.max_steps = 300;
+    t.env.rng = 42;
+    t.env.observations = t.observations;
+    t.env.actions = t.actions;
+    t.env.rewards = t.rewards;
+    t.env.terminals = t.terminals;
+
+    RewardConfig rcfg = test_default_rcfg();
+    init(&t.env, 1, &rcfg, 1, 0, 0);
+    set_curriculum_target(&t.env, (float)CURRICULUM_SIDE_NEAR);
+
+    for (int i = 0; i < 100; i++) {
+        c_reset(&t.env);
+        if (t.env.stage != CURRICULUM_SIDE_NEAR || t.env.max_steps != 300) {
+            printf("stage6_max_steps: stage=%d max_steps=%d [FAIL]\n",
+                    t.env.stage, t.env.max_steps);
+            return 1;
+        }
+    }
+
+    printf("stage6_max_steps: side-near keeps configured max_steps [OK]\n");
+    return 0;
+}
+
+static int test_stage7_side_mid_gets_pursuit_time(void) {
+    TestEnv t;
+    memset(&t, 0, sizeof(t));
+    t.env.num_agents = 1;
+    t.env.max_steps = 300;
+    t.env.rng = 42;
+    t.env.observations = t.observations;
+    t.env.actions = t.actions;
+    t.env.rewards = t.rewards;
+    t.env.terminals = t.terminals;
+
+    RewardConfig rcfg = test_default_rcfg();
+    init(&t.env, 1, &rcfg, 1, 0, 0);
+    set_curriculum_target(&t.env, (float)CURRICULUM_SIDE_MID);
+
+    for (int i = 0; i < 100; i++) {
+        c_reset(&t.env);
+        if (t.env.stage != CURRICULUM_SIDE_MID ||
+                t.env.max_steps != STAGES[CURRICULUM_SIDE_MID].max_steps) {
+            printf("stage7_max_steps: stage=%d max_steps=%d expected=%d [FAIL]\n",
+                    t.env.stage, t.env.max_steps,
+                    STAGES[CURRICULUM_SIDE_MID].max_steps);
+            return 1;
+        }
+    }
+
+    printf("stage7_max_steps: side-mid gets pursuit time [OK]\n");
+    return 0;
+}
+
 int main(void) {
     srand(42);
     int fails = 0;
     fails += test_stage0_max_steps_stays_configured();
     fails += test_stage1_head_on_gets_turnaround_time();
     fails += test_stage2_vertical_gets_climb_time();
+    fails += test_stage6_side_near_stays_configured();
+    fails += test_stage7_side_mid_gets_pursuit_time();
     return fails;
 }
