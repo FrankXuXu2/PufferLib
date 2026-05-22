@@ -164,6 +164,7 @@ typedef struct Log {
                                     // Detects collapsed-policy direction lock-in: ~0 if symmetric, ±large if biased.
     float stage_sum;                // Sum of stages (exported as avg_stage)
     float total_control_rate;       // Sum of per-episode mean squared deltas (exported as avg_control_rate)
+    float curriculum_quality;       // Normalized target progress weighted by unsaturated surface controls
     float base_stage_kills;         // Kills at int(curriculum_target) - for per-stage gating
     float base_stage_eps;           // Episodes at int(curriculum_target) - for per-stage gating
     float low_alt_variant_eps;      // Episodes spawned in a low-altitude curriculum variant
@@ -779,6 +780,14 @@ void add_log(Dogfight *env) {
     // Mean squared control delta per step this episode (lower = smoother control)
     float episode_ticks = fmaxf((float)env->tick, 1.0f);
     env->log.total_control_rate += env->episode_control_rate / episode_ticks;
+    float surface_saturation = (
+        env->episode_action_sat_elevator / episode_ticks +
+        env->episode_action_sat_aileron / episode_ticks +
+        env->episode_action_sat_rudder / episode_ticks) / 3.0f;
+    float target_progress = env->curriculum_target / (float)(CURRICULUM_COUNT - 1);
+    target_progress = fminf(fmaxf(target_progress, 0.0f), 1.0f);
+    float control_health = fminf(fmaxf(1.0f - surface_saturation, 0.0f), 1.0f);
+    env->log.curriculum_quality += target_progress * control_health;
     if (env->low_altitude_variant) {
         env->log.low_alt_variant_eps += 1.0f;
         env->log.low_alt_variant_ticks += (float)env->tick;
@@ -969,6 +978,13 @@ void c_reset(Dogfight *env) {
     env->prev_elevator = 0.0f;
     env->prev_aileron = 0.0f;
     env->prev_rudder = 0.0f;
+    if (env->actions) {
+        env->actions[0] = 0.0f;
+        env->actions[1] = 0.0f;
+        env->actions[2] = 0.0f;
+        env->actions[3] = 0.0f;
+        env->actions[4] = -1.0f;
+    }
 
     // Reset rate observation previous values (schemes 4, 5)
     env->prev_player_target_az = 0.0f;

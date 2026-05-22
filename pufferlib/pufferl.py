@@ -12,6 +12,7 @@ import ast
 import time
 import argparse
 import configparser
+import queue
 from collections import defaultdict
 import multiprocessing as mp
 from copy import deepcopy
@@ -35,6 +36,8 @@ rich.traceback.install(show_locals=False)
 
 import signal # Aggressively exit on ctrl+c
 signal.signal(signal.SIGINT, lambda sig, frame: os._exit(0))
+
+SWEEP_RESULT_WAIT_SECONDS = float(os.environ.get('PUFFER_SWEEP_RESULT_WAIT_SECONDS', 30))
 
 def unroll_nested_dict(d):
     if not isinstance(d, dict):
@@ -64,6 +67,47 @@ def duration(seconds, b2, c2):
     m = f'{b2}{(seconds // 60) % 60}{c2}m '
     s = f'{b2}{seconds % 60}{c2}s'
     return d + h + m + s
+
+def downsample_sweep_logs(all_logs, n):
+    metrics = {}
+    latest = {}
+    bin_count = 1
+
+    def ensure_metric(key):
+        nonlocal bin_count
+        if key not in metrics:
+            metrics[key] = [np.nan] * (bin_count - 1) + [[]]
+
+    logged_timesteps = all_logs[-1]['agent_steps']
+    next_bin = logged_timesteps / (n - 1) if n > 1 else np.inf
+    for log in all_logs:
+        for k, v in log.items():
+            ensure_metric(k)
+            metrics[k][-1].append(v)
+            latest[k] = v
+
+        if log['agent_steps'] < next_bin:
+            continue
+
+        next_bin += logged_timesteps / (n - 1)
+        for k, values in metrics.items():
+            values[-1] = np.mean(values[-1]) if values[-1] else np.nan
+        bin_count += 1
+        for values in metrics.values():
+            values.append([])
+
+    for k, values in metrics.items():
+        values[-1] = latest.get(k, np.nan)
+
+    return metrics
+
+def _finish_wandb_run(args):
+    if not args.get('wandb'):
+        return
+
+    import wandb
+    if getattr(wandb, 'run', None) is not None:
+        wandb.run.finish()
 
 def fmt_perf(name, color, delta_ref, elapsed, b2, c2):
     percent = 0 if delta_ref == 0 else int(100*elapsed/delta_ref - 1e-5)
@@ -219,6 +263,39 @@ def step_curriculum(state, backend, pufferl, flat_logs, epoch):
         flush=True,
     )
 
+def add_derived_sweep_metrics(args, flat_logs):
+    if args.get('env_name') != 'dogfight':
+        return
+
+    target = flat_logs.get('env/curriculum_target')
+    surface_keys = (
+        'env/action_sat_elevator',
+        'env/action_sat_aileron',
+        'env/action_sat_rudder',
+    )
+    if target is None or any(k not in flat_logs for k in surface_keys):
+        return
+
+    try:
+        target = float(target)
+        surface_saturation = sum(float(flat_logs[k]) for k in surface_keys) / len(surface_keys)
+        max_target = float(args.get('curriculum', {}).get('max_target', 18.0))
+    except (TypeError, ValueError):
+        return
+
+    if max_target <= 0:
+        return
+
+    target_progress = min(max(target / max_target, 0.0), 1.0)
+    surface_saturation = min(max(surface_saturation, 0.0), 1.0)
+    flat_logs['env/curriculum_soft_quality'] = target_progress * (1.0 - 0.5 * surface_saturation)
+
+def sweep_early_stop_ready(global_step, total_timesteps, sweep_config):
+    fraction_threshold = min(0.20 * total_timesteps, 100_000_000)
+    min_steps = float(sweep_config.get('early_stop_min_steps', 0) or 0)
+    threshold = min(total_timesteps, max(fraction_threshold, min_steps))
+    return global_step > threshold
+
 def _resolve_backend(args):
     compiled_env = getattr(_C, 'env_name', None)
     assert compiled_env is None or compiled_env == args['env_name'], \
@@ -273,6 +350,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         print(f'WARNING: {e}, skipping')
         if result_queue is not None:
             result_queue.put((args['gpu_id'], [], [], []))
+        _finish_wandb_run(args)
         return
 
     args.pop('nccl_id', None)
@@ -291,6 +369,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
         backend.close(pufferl)
         if result_queue is not None:
             result_queue.put((args['gpu_id'], [], [], []))
+        _finish_wandb_run(args)
         return
     curriculum_state = setup_curriculum(args, backend, pufferl)
 
@@ -324,6 +403,8 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
             selfplay.step(pufferl, backend, pool_state, flat_logs, epoch)
             step_curriculum(curriculum_state, backend, pufferl, flat_logs, epoch)
 
+        add_derived_sweep_metrics(args, flat_logs)
+
         if verbose:
             print_dashboard(args, model_size, flat_logs)
 
@@ -337,8 +418,8 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
             all_logs.append(flat_logs)
 
             if (sweep_obj is not None
-                    and pufferl.global_step > min(0.20*total_timesteps, 100_000_000) and
-                    sweep_obj.early_stop(logs, target_key)):
+                    and sweep_early_stop_ready(pufferl.global_step, total_timesteps, args['sweep']) and
+                    sweep_obj.early_stop(flat_logs, target_key)):
                 break
         elif flat_logs['env/n'] > args['eval_episodes']:
             break
@@ -353,8 +434,10 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     backend.close(pufferl)
 
     if target_key not in flat_logs:
+        print(f'WARNING: missing sweep metric {target_key}, marking trial failed', flush=True)
         if result_queue is not None:
             result_queue.put((args['gpu_id'], None, None, None))
+        _finish_wandb_run(args)
         return
 
     # Match-mode scoring: primary = trained policy (model_path); frozen bank =
@@ -379,25 +462,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
     # This version has the training perf logs and eval env logs
     all_logs.append(flat_logs)
 
-    # Downsample results
-    n = args['sweep']['downsample']
-    metrics = {k: [[]] for k in all_logs[0]}
-    logged_timesteps = all_logs[-1]['agent_steps']
-    next_bin = logged_timesteps / (n - 1) if n > 1 else np.inf
-    for log in all_logs:
-        for k, v in log.items():
-            metrics[k][-1].append(v)
-
-        if log['agent_steps'] < next_bin:
-            continue
-
-        next_bin += logged_timesteps / (n - 1)
-        for k in metrics:
-            metrics[k][-1] = np.mean(metrics[k][-1])
-            metrics[k].append([])
-
-    for k in metrics:
-        metrics[k][-1] = all_logs[-1][k]
+    metrics = downsample_sweep_logs(all_logs, args['sweep']['downsample'])
 
     # Match-mode: single observation at final-training cost. Protein's curve
     # fit collapses to one point — we only trust the match winrate, not any
@@ -419,7 +484,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
             artifact.add_file(model_path)
             wandb.run.log_artifact(artifact)
 
-        wandb.run.finish()
+        _finish_wandb_run(args)
 
     if result_queue is not None:
         if match_mode:
@@ -427,7 +492,7 @@ def _train(env_name, args, sweep_obj=None, result_queue=None, verbose=False):
             result_queue.put((args['gpu_id'], [match_score],
                 [metrics['uptime'][-1]], [metrics['agent_steps'][-1]]))
         else:
-            result_queue.put((args['gpu_id'], metrics['env/score'], metrics['uptime'], metrics['agent_steps']))
+            result_queue.put((args['gpu_id'], metrics[target_key], metrics['uptime'], metrics['agent_steps']))
 
 def train(env_name, args=None, gpus=None, **kwargs):
     args = args or load_config(env_name)
@@ -443,6 +508,7 @@ def train(env_name, args=None, gpus=None, **kwargs):
         gpus = gpus[-1:] + gpus[:-1]  # Main process gets rank 0
 
     ctx = mp.get_context('spawn')
+    processes = []
     for rank, gpu_id in reversed(list(enumerate(gpus))):
         worker_args = deepcopy(args)
         worker_args['rank'] = rank
@@ -453,15 +519,89 @@ def train(env_name, args=None, gpus=None, **kwargs):
             # Protein's GP models live on cuda:0 on non-WSL setups; spawn-pickling
             # them works fine via CUDA IPC. On WSL, sweep.py forces device='cpu'
             # at construction so there's nothing to move.
-            ctx.Process(target=_train, args=(env_name, worker_args),
-                kwargs=kwargs).start()
+            proc = ctx.Process(target=_train, args=(env_name, worker_args),
+                kwargs=kwargs)
+            proc.start()
+            processes.append(proc)
+
+    return processes
+
+def _join_sweep_processes(processes, timeout=0):
+    for proc in processes:
+        proc.join(timeout=timeout)
+
+def _terminate_sweep_processes(processes):
+    for proc in processes:
+        if proc.is_alive():
+            proc.terminate()
+    for proc in processes:
+        proc.join(timeout=1)
+    for proc in processes:
+        if proc.is_alive() and hasattr(proc, 'kill'):
+            proc.kill()
+            proc.join(timeout=1)
+
+def _sweep_processes_finished(processes):
+    return bool(processes) and all(proc.exitcode is not None for proc in processes)
+
+def _sweep_processes_failed(processes):
+    return any(proc.exitcode not in (None, 0) for proc in processes)
+
+def _observe_failed_sweep_run(sweep_obj, run, reason):
+    args = run['args']
+    print(f'WARNING: sweep trial on gpu {run["gpu_id"]} failed: {reason}', flush=True)
+    sweep_obj.observe(args, 0, 0, is_failure=True)
+    _terminate_sweep_processes(run['processes'])
+
+def _record_sweep_result(sweep_obj, active, gpu_id, scores, costs, timesteps):
+    run = active.pop(gpu_id, None)
+    if run is None:
+        print(f'WARNING: ignoring stale sweep result from gpu {gpu_id}', flush=True)
+        return 0
+
+    done_args = run['args']
+    _join_sweep_processes(run['processes'], timeout=0)
+    if not scores:
+        sweep_obj.observe(done_args, 0, 0, is_failure=True)
+        return 1
+
+    for s, c, t in zip(scores, costs, timesteps):
+        done_args['train']['total_timesteps'] = t
+        sweep_obj.observe(done_args, s, c, is_failure=False)
+    return 1
+
+def _collect_sweep_result(result_queue, active, sweep_obj, wait_seconds=None):
+    wait_seconds = SWEEP_RESULT_WAIT_SECONDS if wait_seconds is None else wait_seconds
+    try:
+        gpu_id, scores, costs, timesteps = result_queue.get(timeout=wait_seconds)
+    except queue.Empty:
+        for gpu_id, run in list(active.items()):
+            processes = run['processes']
+            if _sweep_processes_failed(processes):
+                active.pop(gpu_id)
+                exitcodes = [proc.exitcode for proc in processes]
+                _observe_failed_sweep_run(sweep_obj, run, f'exitcodes={exitcodes}')
+                return 1, True
+            if _sweep_processes_finished(processes):
+                active.pop(gpu_id)
+                _observe_failed_sweep_run(sweep_obj, run, 'exited without result')
+                return 1, True
+        return 0, False
+
+    completed = _record_sweep_result(
+        sweep_obj, active, gpu_id, scores, costs, timesteps)
+    return completed, True
 
 def sweep(env_name, args=None, pareto=False):
     '''Train entry point. Handles single-GPU, multi-GPU DDP, and sweeps.'''
     args = args or load_config(env_name)
+    _resolve_backend(args)  # Fail before spawning workers if build.sh targets another env.
     exp_gpus = args['train']['gpus']
     sweep_gpus = args['sweep']['gpus'] or len(os.listdir('/proc/driver/nvidia/gpus'))
-    args['vec']['num_threads'] //= (sweep_gpus // exp_gpus)
+    max_active = sweep_gpus // exp_gpus
+    if max_active < 1:
+        raise ValueError(f'sweep.gpus {sweep_gpus} must be >= train.gpus {exp_gpus}')
+    args['vec']['num_threads'] //= max_active
     args['no_model_upload'] = True
 
     sweep_config = args['sweep']
@@ -482,23 +622,20 @@ def sweep(env_name, args=None, pareto=False):
 
     active = {}
     completed = 0
-    while completed < num_experiments:
-        if len(active) >= sweep_gpus//exp_gpus: # Collect completed runs
-            gpu_id, scores, costs, timesteps = result_queue.get()
-            done_args = active.pop(gpu_id)
-
-            if not scores:
-                sweep_obj.observe(done_args, 0, 0, is_failure=True)
-            else:
-                completed += 1
-
-            for s, c, t in zip(scores, costs, timesteps):
-                done_args['train']['total_timesteps'] = t
-                sweep_obj.observe(done_args, s, c, is_failure=False)
+    while completed < num_experiments or active:
+        should_collect = active and (
+            len(active) >= max_active or completed + len(active) >= num_experiments)
+        if should_collect:
+            finished, handled = _collect_sweep_result(
+                result_queue, active, sweep_obj)
+            completed += finished
+            if not handled:
+                continue
+            continue
 
         idx = completed + len(active)
         if idx >= num_experiments:
-            break # All experiments launched
+            continue # All experiments launched; drain active workers
 
         # TODO: only 1 per sweep etc
         gpu_id = next(i for i in range(sweep_gpus) if i not in active)
@@ -511,12 +648,18 @@ def sweep(env_name, args=None, pareto=False):
         except (AssertionError, ValueError) as e:
             print(f'WARNING: {e}, skipping')
             sweep_obj.observe(args, 0, 0, is_failure=True)
+            completed += 1
             continue
 
         exp_args = deepcopy(args)
-        active[gpu_id] = exp_args
-        train(env_name, exp_args, range(gpu_id, gpu_id + exp_gpus),
+        processes = train(env_name, exp_args, range(gpu_id, gpu_id + exp_gpus),
             sweep_obj=sweep_obj, result_queue=result_queue)
+        active[gpu_id] = {
+            'args': exp_args,
+            'gpu_id': gpu_id,
+            'processes': processes,
+            'started_at': time.time(),
+        }
 
 def eval(env_name, args=None, load_path=None):
     '''Evaluate a trained policy. Supports both native and --slowly torch backends.'''

@@ -84,9 +84,9 @@ Avoid `git cherry-pick` from the reference repos. Read the code and history, ide
 
 Do not start the next phase until the current phase is green. If a change touches constructor/init arguments, observation sizes, action layout, reward fields, logging, or config keys, stop and think through the tests and call sites before editing.
 
-## First Port Commit
+## Existing Dogfight Port Baseline
 
-Start by copying the structurally 4.0-compatible Dogfight files from `dogfight4`, not from `dogfight3`.
+Dogfight has already been copied into this working repo from the structurally 4.0-compatible `dogfight4` baseline. Do not recopy these files over current work. Treat this list as provenance and an inventory of the initial port baseline, not as a task to repeat.
 
 Initial copy set:
 
@@ -106,13 +106,13 @@ Initial copy set:
 /home/claude/dogfight4/ocean/dogfight/tests/               -> ocean/dogfight/tests/
 ```
 
-Then run:
+After changing this baseline, run:
 
 ```bash
 scripts/run_dogfight_tests.sh
 ```
 
-Only after the 4.0 structural port builds/tests should agents start bringing behavior back from `dogfight3`:
+Behavioral work from `dogfight3` should still be brought over one feature at a time:
 
 ```text
 train_selfplay.py
@@ -216,7 +216,7 @@ Current 4.0 build syntax:
 ./build.sh all               # all envs, slow
 ```
 
-`./build.sh dogfight` will fail until `ocean/dogfight/binding.c` and friends have been ported into the clean repo. That failure is expected before the first Dogfight implementation commit.
+`./build.sh dogfight` is expected to succeed in the current ported repo. If it fails, treat that as a regression or environment problem and inspect the build output before making changes.
 
 Use the `.venv` for Python commands. `build.sh` expects `python` on PATH, so activate first:
 
@@ -242,7 +242,7 @@ scripts/install_puffer_cuda_venv_hook.sh
 
 Current system-tool status on `g240`:
 
-- `clang`, `libomp-dev`, and `ccache` are installed.
+- `clang`, `libomp-dev`, `ccache`, and `gdb` are installed.
 - `./build.sh cartpole --cpu` was verified with `CC=clang`.
 - This session is WSL2. NVIDIA WSL GPU access works outside the Codex sandbox:
   - `nvidia-smi` sees `NVIDIA GeForce RTX 5060`.
@@ -262,6 +262,64 @@ bash ocean/dogfight/tests/run_all.sh
 For render tests, let the render run until the human exits it. Do not add artificial time limits or auto-close logic just to make the command finish.
 
 After modifying Dogfight physics, observations, actions, rewards, or `dogfight.h`, run the C dogfight tests and any relevant Python flight tests. After modifying league/eval/self-play Python, run the focused Python tests for those modules once they exist in the clean repo.
+
+## Dogfight Debugger Workflow
+
+Use the deterministic C debug harness before improvising with Python training logs. It gives agents a repeatable single-env episode and can run either as a normal trace generator or under batch GDB.
+
+Primary deterministic trace:
+
+```bash
+cd /home/claude/PufferLib
+scripts/debug_dogfight_episode.sh --mode run --steps 300 --seed 42 --stage 0 --action neutral
+```
+
+Outputs are written outside the repo:
+
+```text
+/tmp/dogfight_debug/dogfight_debug_episode
+/tmp/dogfight_debug/episode.csv
+/tmp/dogfight_debug/summary.txt
+```
+
+Same `--seed`, `--stage`, `--obs-scheme`, and action args should produce byte-identical CSV output. Change the seed, stage, or action to prove a suspected behavior is input-dependent.
+
+Batch GDB:
+
+```bash
+scripts/debug_dogfight_episode.sh --mode gdb --steps 300 --seed 42 --stage 3 --action neutral --break-tick 120
+```
+
+GDB writes:
+
+```text
+/tmp/dogfight_debug/gdb_report.txt
+```
+
+The GDB template sets breakpoints on stable harness anchors plus Dogfight internals such as `c_reset`, `c_step`, `spawn_by_curriculum`, `compute_observations`, and `check_hit`. Reports include backtraces, arguments, selected locals, tick/stage/reward/terminal/death state, actions, and player/opponent pose.
+
+Important sandbox note: GDB needs `ptrace`. In Codex, run the GDB mode with escalated permissions if the report says `ptrace: Operation not permitted` or `Could not trace the inferior process`. Plain `--mode run` does not need ptrace.
+
+Reward-hacking diagnosis:
+
+```bash
+scripts/debug_dogfight_episode.sh --mode gdb --steps 50 --seed 42 --stage 3 --action neutral --watch-reward
+```
+
+`--watch-reward` installs a hardware watchpoint on `env->rewards[0]` at `c_step` entry. The report will stop on writes and show `Old value`, `New value`, source line, call stack, and locals. Verified: the watchpoint stops on reward writes, including injected reward spikes.
+
+Use this for hard-to-debug behavior:
+
+- Suspicious reward spikes: run with `--watch-reward`.
+- Unexpected terminals or death reasons: add or adapt a watchpoint for `env->terminals[0]` or `env->death_reason` in `/tmp/dogfight_debug/debug_dogfight_episode.gdb` or `scripts/debug_dogfight_episode.gdb`.
+- Stage/curriculum issues: use `--stage N`, `--break-tick N`, and inspect `spawn_by_curriculum` / `c_reset` frames in the report.
+- Action or control exploitation: compare `episode.csv` across neutral and constant actions:
+
+```bash
+scripts/debug_dogfight_episode.sh --mode run --steps 300 --seed 42 --stage 3 --action constant --action-values 0.5,0,1,0,-1
+```
+
+Only escalate to `scripts/debug_dogfight_train_gdb.sh` when deterministic C behavior is clean but Python/native-extension training differs. Use CUDA debugging only when there is evidence of backend or kernel failure.
 
 General status:
 
@@ -297,10 +355,10 @@ source .venv/bin/activate
 ./build.sh dogfight
 ```
 
-Expected current result before Dogfight is ported:
+Expected current result:
 
 ```text
-Error: environment 'dogfight' not found
+Built: pufferlib/_C.cpython-312-x86_64-linux-gnu.so
 ```
 
 CPU-build sanity check for an existing env:
@@ -345,10 +403,10 @@ source .venv/bin/activate
 bash ocean/dogfight/tests/run_all.sh
 ```
 
-Expected current result before Dogfight is ported:
+Expected current result:
 
 ```text
-bash: ocean/dogfight/tests/run_all.sh: No such file or directory
+failed: 0
 ```
 
 Smoke-test training in the foreground:
@@ -359,10 +417,10 @@ source .venv/bin/activate
 python -m pufferlib.pufferl train dogfight
 ```
 
-Expected current result before `config/dogfight.ini` is ported:
+Expected current result:
 
 ```text
-ValueError: No config for env_name dogfight
+Dogfight training starts. Stop it manually unless you intentionally want a long run.
 ```
 
 Run training to a timestamped log:
@@ -392,6 +450,28 @@ python -m pufferlib.pufferl sweep dogfight \
 
 On WSL, keep `--sweep.use-gpu ""` in official sweep smoke commands so Protein
 GP tensors remain on CPU while the trainer uses GPU.
+
+Run a W&B-visible 2-trial Dogfight Protein sweep. This is the verified command
+format for plotting both runs in project `df37`:
+
+```bash
+cd /home/claude/PufferLib
+source .venv/bin/activate
+python -m pufferlib.pufferl sweep dogfight \
+  --sweep.max-runs 2 \
+  --sweep.gpus 1 \
+  --train.gpus 1 \
+  --train.total-timesteps 200_000_000 \
+  --sweep.use-gpu "" \
+  --wandb \
+  --wandb-project df37 \
+  --wandb-group dogfight-protein-2x200m
+```
+
+Verified on `g240` outside the Codex sandbox: both runs completed and appeared
+in W&B project `df37` as `wt4lzh9r` and `s9hkh20u`. GPU sweeps must run with
+escalated permissions/outside the sandbox because CUDA device visibility is
+blocked in the sandbox.
 
 Evaluate a checkpoint with the native eval path:
 
@@ -469,6 +549,7 @@ Standard training, once Dogfight is registered:
 
 ```bash
 cd /home/claude/PufferLib
+source .venv/bin/activate
 python -m pufferlib.pufferl train dogfight
 ```
 

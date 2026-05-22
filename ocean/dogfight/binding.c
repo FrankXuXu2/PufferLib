@@ -63,11 +63,14 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "score", log->score);
     dict_set(out, "episode_return", log->episode_return);
     dict_set(out, "episode_length", log->episode_length);
-    dict_set(out, "n", log->n);
+    // static_vec_log appends the real episode count after my_log().
+    // dict_set(out, "n", log->n);
 
     // Combat
     dict_set(out, "shots_fired", log->shots_fired);
-    dict_set(out, "accuracy", log->accuracy);
+    // Derived from kills/shots and not needed for Protein; leave one slot
+    // free so VecEnv.log stays within its 32-key Dict capacity.
+    // dict_set(out, "accuracy", log->accuracy);
     dict_set(out, "sp_player_kills", log->sp_player_kills);
     dict_set(out, "sp_opp_kills", log->sp_opp_kills);
 
@@ -75,6 +78,7 @@ void my_log(Log* log, Dict* out) {
     dict_set(out, "stage", log->stage);
     dict_set(out, "avg_stage", log->stage_sum);
     dict_set(out, "avg_stage_weight", log->total_stage_weight);
+    dict_set(out, "curriculum_quality", log->curriculum_quality);
     dict_set(out, "base_stage_kills", log->base_stage_kills);
     dict_set(out, "base_stage_eps", log->base_stage_eps);
     dict_set(out, "low_alt_variant_eps", log->low_alt_variant_eps);

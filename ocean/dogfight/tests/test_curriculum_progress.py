@@ -24,7 +24,7 @@ def main():
         "curriculum": {
             "enabled": 1,
             "initial_target": 0.9,
-            "max_target": 2.0,
+            "max_target": 18.0,
             "step": 1.0,
             "promote_threshold": 0.9,
             "min_episodes": 100,
@@ -55,11 +55,13 @@ def main():
     assert backend.targets == [0.9, 1.9]
     assert flat_logs["env/curriculum_target"] == 1.9
 
-    step_curriculum(state, backend, object(), flat_logs, epoch=3)
-    assert state["target"] == 2.0
-    step_curriculum(state, backend, object(), flat_logs, epoch=4)
-    assert state["target"] == 2.0
-    assert backend.targets == [0.9, 1.9, 2.0]
+    for epoch in range(3, 20):
+        step_curriculum(state, backend, object(), flat_logs, epoch=epoch)
+    assert state["target"] == 18.0
+
+    step_curriculum(state, backend, object(), flat_logs, epoch=20)
+    assert state["target"] == 18.0
+    assert backend.targets[-1] == 18.0
 
     print("  test_curriculum_progress          [OK]")
     return 0

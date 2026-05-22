@@ -60,8 +60,11 @@ cat /tmp/dogfight_sweep_200m_random/summary.csv
 ```
 
 The Dogfight config sets the official PufferLib sweep objective to
-`env/curriculum_target`, so `pufferlib.pufferl sweep dogfight` can be used when
-we want Protein to suggest hypers directly. The Dogfight-local runner remains
+`env/curriculum_soft_quality`, a Python-derived target-progress score that
+applies a 50% penalty for elevator, aileron, and rudder saturation. The stricter
+`env/curriculum_quality` metric is still logged by the environment, but the
+softer sweep metric keeps Protein from overvaluing clean low-target runs while
+still discounting saturated control policies. The Dogfight-local runner remains
 useful when we want resumable per-trial stdout logs and a CSV summary of
 curriculum-specific diagnostics such as `base_stage_kills`, `player_ground`,
 action saturation, and signed bias.
@@ -77,6 +80,130 @@ python -m pufferlib.pufferl sweep dogfight \
   --train.total-timesteps 262144 \
   --sweep.use-gpu ""
 ```
+
+For longer official Protein sweeps, remember that sweep-space bounds control
+later suggestions. `--train.total-timesteps` sets only the default trial.
+Dogfight intentionally narrows its local sweep space from the PufferLib default:
+`policy.hidden_size <= 256`, `policy.num_layers <= 4`, `train.horizon >= 32`,
+and `train.total_timesteps` in the `25M..100M` range centered at `50M`. It also
+sets `sweep.early_stop_min_steps = 40M`, so short promotion probes are not
+killed before they have a chance to show post-1.9 progress. This avoids
+pathological large-model, low-horizon trials that can look hung while still
+training.
+
+## Sweep Analysis and Hyper Benchmark
+
+After a sweep, rank local W&B runs by target progress and export the
+hyperparameters that produced the best short-run promotions. Set
+`--analysis-project` to the W&B project being analyzed, for example `df38` for
+the accepted baseline profile:
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --analyze-wandb wandb \
+  --analysis-project df38 \
+  --analysis-out /tmp/df38_analysis.csv
+```
+
+The accepted hyper-selection profile from `df38` is now the benchmark baseline.
+It pins `policy.hidden-size=128`, `policy.num-layers=3`,
+`train.horizon=256`, `train.learning-rate=0.024`, `train.ent-coef=0.001`,
+and `train.clip-coef=0.30`, plus the remaining train/vector defaults needed to
+keep future code-change benchmarks from drifting. The old pre-`df38` INI
+defaults are preserved as the historical `pre_df38_ini_defaults` profile.
+
+List the saved benchmark profiles:
+
+```bash
+python ocean/dogfight/sweep_hypers.py --list-benchmark-profiles
+```
+
+Dry-run the current baseline benchmark commands before launching:
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --benchmark \
+  --steps 50000000 \
+  --dry-run \
+  --log-dir /tmp/dogfight_hyper_benchmark
+```
+
+Run five seeds with the current accepted baseline profile. Point
+`--wandb-project` at the active sweep project:
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --benchmark \
+  --steps 50000000 \
+  --log-dir /tmp/dogfight_hyper_benchmark \
+  --wandb-project df38 \
+  --wandb-group df38-hyper-baseline
+```
+
+To rerun the historical old-vs-current hyper comparison, include the historical
+profile as the candidate:
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --benchmark \
+  --benchmark-candidate-profile pre_df38_ini_defaults \
+  --steps 50000000 \
+  --log-dir /tmp/dogfight_hyper_history \
+  --wandb-project df38 \
+  --wandb-group df38-hyper-history
+```
+
+After a paired benchmark with a real candidate profile finishes, use the
+comparison gate:
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --compare-benchmark /tmp/dogfight_hyper_benchmark/summary.csv
+```
+
+That gate passes when the candidate group has no extra failed runs, matches or
+beats baseline median and best `max_target`, and keeps median
+`selection_score` within 90% of baseline or better.
+
+Once the profile is accepted, use the fixed-profile change benchmark for
+behavior changes. This pins the selected model/training profile plus the other
+Dogfight train/vector defaults, so old-vs-new comparisons cannot accidentally
+drift because an unrelated hyperparameter changed.
+
+Before a behavior change:
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --change-benchmark \
+  --steps 50000000 \
+  --log-dir /tmp/dogfight_change_old \
+  --wandb-project df39 \
+  --wandb-group before-change
+```
+
+After the behavior change:
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --change-benchmark \
+  --steps 50000000 \
+  --log-dir /tmp/dogfight_change_candidate \
+  --wandb-project df39 \
+  --wandb-group after-change
+```
+
+Compare the two fixed-profile summaries:
+
+```bash
+python ocean/dogfight/sweep_hypers.py \
+  --compare-change-benchmark \
+  /tmp/dogfight_change_old/summary.csv \
+  /tmp/dogfight_change_candidate/summary.csv
+```
+
+The change gate first verifies each paired seed has exactly the same override
+set in both summaries. It then applies the same no-extra-failures, median/best
+`max_target`, and median `selection_score` checks to the candidate runs.
 
 Crash handling:
 

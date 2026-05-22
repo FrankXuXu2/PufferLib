@@ -44,22 +44,21 @@ def default_tensor_dtype(dtype):
         torch.set_default_dtype(old_dtype)
 
 class Space:
-    def __init__(self, min, max, scale, is_integer=False):
+    def __init__(self, min, max, scale, is_integer=False, mean=None):
         self.min = min
         self.max = max
         self.scale = scale
         self.norm_min = self.normalize(min)
         self.norm_max = self.normalize(max)
-        # Since min/max are normalized from -1 to 1, just use 0 as a mean
-        self.norm_mean = 0
         self.is_integer = is_integer
+        self.norm_mean = 0 if mean is None else self.normalize(mean)
 
 class Linear(Space):
-    def __init__(self, min, max, scale, is_integer=False):
+    def __init__(self, min, max, scale, is_integer=False, mean=None):
         if scale == 'auto':
             scale = 0.5
 
-        super().__init__(min, max, scale, is_integer)
+        super().__init__(min, max, scale, is_integer, mean)
 
     def normalize(self, value):
         #assert isinstance(value, (int, float))
@@ -74,12 +73,12 @@ class Linear(Space):
         return value
 
 class Pow2(Space):
-    def __init__(self, min, max, scale, is_integer=False):
+    def __init__(self, min, max, scale, is_integer=False, mean=None):
         if scale == 'auto':
             scale = 0.5
             #scale = 2 / (np.log2(max) - np.log2(min))
 
-        super().__init__(min, max, scale, is_integer)
+        super().__init__(min, max, scale, is_integer, mean)
 
     def normalize(self, value):
         #assert isinstance(value, (int, float))
@@ -96,14 +95,14 @@ class Pow2(Space):
 class Log(Space):
     base: int = 10
 
-    def __init__(self, min, max, scale, is_integer=False):
+    def __init__(self, min, max, scale, is_integer=False, mean=None):
         if scale == 'time':
             # TODO: Set scaling param intuitively based on number of jumps from min to max
             scale = 1 / (np.log2(max) - np.log2(min))
         elif scale == 'auto':
             scale = 0.5
 
-        super().__init__(min, max, scale, is_integer)
+        super().__init__(min, max, scale, is_integer, mean)
 
     def normalize(self, value):
         #assert isinstance(value, (int, float))
@@ -122,11 +121,11 @@ class Log(Space):
 class Logit(Space):
     base: int = 10
 
-    def __init__(self, min, max, scale, is_integer=False):
+    def __init__(self, min, max, scale, is_integer=False, mean=None):
         if scale == 'auto':
             scale = 0.5
 
-        super().__init__(min, max, scale, is_integer)
+        super().__init__(min, max, scale, is_integer, mean)
 
     def normalize(self, value):
         value = max(self.min, min(value, self.max))
@@ -146,7 +145,10 @@ def _params_from_puffer_sweep(sweep_config, only_include=None):
 
     for name, param in sweep_config.items():
         if name in ('method', 'metric', 'metric_distribution', 'goal', 'downsample', 'use_gpu', 'prune_pareto',
-                    'sweep_only', 'max_suggestion_cost', 'early_stop_quantile', 'gpus', 'max_runs'):
+                    'sweep_only', 'max_suggestion_cost', 'early_stop_quantile', 'gpus', 'max_runs',
+                    'early_stop_min_steps',
+                    'match_enemy_model_path', 'match_num_games', 'match_enemy_hidden_size',
+                    'match_enemy_num_layers'):
             continue
 
         assert isinstance(param, dict), f'Param {name} is not a dict'
@@ -163,6 +165,7 @@ def _params_from_puffer_sweep(sweep_config, only_include=None):
             min=param['min'],
             max=param['max'],
             scale=param['scale'],
+            mean=param.get('mean'),
         )
         if distribution == 'uniform':
             space = Linear(**kwargs)
@@ -957,15 +960,31 @@ class Protein:
         return score < threshold
 
     def early_stop(self, logs, target_key):
-        for k, v in logs['loss'].items():
+        if 'loss' in logs:
+            loss_items = logs['loss'].items()
+        else:
+            loss_items = (
+                (k, v) for k, v in logs.items()
+                if isinstance(k, str) and k.startswith('loss/')
+            )
+        for k, v in loss_items:
             if np.isnan(v):
                 logs['is_loss_nan'] = True
                 return True
 
-        if 'uptime' not in logs or target_key not in logs:
+        if 'uptime' not in logs:
             return False
 
-        metric_val, cost = logs['env'][target_key], logs['uptime']
+        if target_key in logs:
+            metric_val = logs[target_key]
+        elif 'env' in logs and target_key.startswith('env/'):
+            metric_val = logs['env'].get(target_key[4:])
+        else:
+            metric_val = None
+        if metric_val is None:
+            return False
+
+        cost = logs['uptime']
         self._running_target_buffer.append(metric_val)
         target_running_mean = np.mean(self._running_target_buffer)
         threshold = self.get_early_stop_threshold(cost)

@@ -110,6 +110,43 @@ static int test_action_telemetry(void) {
     return 0;
 }
 
+static int test_curriculum_quality_penalizes_surface_saturation(void) {
+    TestEnv healthy;
+    setup_env(&healthy, 1);
+    set_curriculum_target(&healthy.env, 9.0f);
+    healthy.env.tick = 4;
+    healthy.env.death_reason = DEATH_TIMEOUT;
+    healthy.env.episode_action_sat_elevator = 0.0f;
+    healthy.env.episode_action_sat_aileron = 2.0f;
+    healthy.env.episode_action_sat_rudder = 0.0f;
+    add_log(&healthy.env);
+
+    float progress = 9.0f / (float)(CURRICULUM_COUNT - 1);
+    float health = 1.0f - ((0.0f / 4.0f + 2.0f / 4.0f + 0.0f / 4.0f) / 3.0f);
+    float expected = progress * health;
+
+    TestEnv saturated;
+    setup_env(&saturated, 1);
+    set_curriculum_target(&saturated.env, (float)(CURRICULUM_COUNT - 1));
+    saturated.env.tick = 4;
+    saturated.env.death_reason = DEATH_TIMEOUT;
+    saturated.env.episode_action_sat_elevator = 4.0f;
+    saturated.env.episode_action_sat_aileron = 4.0f;
+    saturated.env.episode_action_sat_rudder = 4.0f;
+    add_log(&saturated.env);
+
+    if (!nearly(healthy.env.log.curriculum_quality, expected) ||
+            !nearly(saturated.env.log.curriculum_quality, 0.0f)) {
+        printf("curriculum_quality: healthy=%.4f expected=%.4f saturated=%.4f [FAIL]\n",
+                healthy.env.log.curriculum_quality, expected,
+                saturated.env.log.curriculum_quality);
+        return 1;
+    }
+
+    printf("curriculum_quality: stage progress penalized by saturation [OK]\n");
+    return 0;
+}
+
 int main(void) {
     srand(42);
     int fails = 0;
@@ -117,5 +154,6 @@ int main(void) {
     fails += test_stage_has_no_low_alt_variant(1, 500);
     fails += test_low_alt_variant_log_for_stage(3);
     fails += test_action_telemetry();
+    fails += test_curriculum_quality_penalizes_surface_saturation();
     return fails;
 }
